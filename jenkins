@@ -1,0 +1,74 @@
+pipeline {
+    agent any
+
+    environment {
+        TRIVY_FORMAT = "json"
+        TRIVY_REPORT = "trivy_report.json"
+        TRIVY_EXIT_CODE = 0
+        GITHUB_REPO = "https://github.com/your-username/your-repository.git"
+        GITHUB_BRANCH = "main"
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "*/${GITHUB_BRANCH}"]],
+                        userRemoteConfigs: [[
+                            url: "${GITHUB_REPO}",
+                            credentialsId: 'github-credentials'
+                        ]]
+                    ])
+                }
+            }
+        }
+
+        stage('Scan Terraform Files') {
+            steps {
+                script {
+                    echo "Scanning Terraform files using Trivy"
+
+                    // Run Trivy to scan Terraform files
+                    sh '''
+                    trivy config --format ${TRIVY_FORMAT} --output ${TRIVY_REPORT} . || true
+                    '''
+                }
+            }
+        }
+
+        stage('Publish Trivy Report') {
+            steps {
+                script {
+                    echo "Publishing Trivy Report"
+
+                    // Archive the Trivy report as an artifact
+                    archiveArtifacts artifacts: "${TRIVY_REPORT}", fingerprint: true
+
+                    // Optionally print the report in console
+                    sh 'cat ${TRIVY_REPORT}'
+                }
+            }
+        }
+
+        stage('Fail on High Severity Vulnerabilities') {
+            steps {
+                script {
+                    def result = sh(script: "jq '.Results[].Misconfigurations[] | select(.Severity==\"HIGH\")' ${TRIVY_REPORT}", returnStatus: true)
+                    if (result == 0) {
+                        error "High Severity misconfigurations found in Terraform code. Build failed!"
+                    } else {
+                        echo "No High Severity misconfigurations found."
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Job Finished"
+        }
+    }
+}
